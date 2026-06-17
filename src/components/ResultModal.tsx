@@ -180,39 +180,84 @@ export default function ResultModal({ onBackToMenu, onNextLevel }: ResultModalPr
                 </div>
               )}
 
-              <div className="bg-black/30 rounded-xl p-4 border border-white/5 space-y-2 text-sm">
-                <h4 className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">本次状态</h4>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">当前矿石价值</span>
-                    <span className="font-mono font-bold text-yellow-400">{rover.cargoValue}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">货箱重量</span>
-                    <span className="font-mono font-bold text-amber-400">{rover.cargoWeight}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">剩余电量</span>
-                    <span className="font-mono font-bold text-cyan-400">{Math.ceil(power)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">剩余时间</span>
-                    <span className="font-mono font-bold text-orange-400">{Math.ceil(timeRemaining)}s</span>
+              {failReason === 'value' && level ? (
+                <div className="bg-gradient-to-br from-red-950/60 to-yellow-950/40 rounded-2xl p-5 border-2 border-yellow-600/40 space-y-4">
+                  <h4 className="text-sm text-yellow-300 font-black uppercase tracking-widest flex items-center gap-2">
+                    <span>⛏</span> 矿石价值明细
+                  </h4>
+                  {(() => {
+                    const targetValue = level.baseStations.find(b => b.type === 'return')?.requiredValue || 0;
+                    const currentValue = rover.cargoValue;
+                    const diff = Math.max(0, targetValue - currentValue);
+                    const progress = Math.min(100, (currentValue / targetValue) * 100);
+                    return (
+                      <>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-gray-400 text-xs">完成进度</span>
+                            <span className="font-mono font-bold text-yellow-300 text-sm">{Math.floor(progress)}%</span>
+                          </div>
+                          <div className="h-4 bg-black/60 rounded-full overflow-hidden border border-yellow-700/50">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${progress}%`,
+                                background: progress >= 100
+                                  ? 'linear-gradient(90deg, #10b981, #34d399)'
+                                  : 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 text-center">
+                          <div className="bg-black/30 rounded-xl p-3 border border-yellow-600/20">
+                            <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">当前价值</div>
+                            <div className="font-mono font-black text-xl text-yellow-400">{currentValue}</div>
+                          </div>
+                          <div className="bg-black/30 rounded-xl p-3 border border-red-600/30">
+                            <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">还需差额</div>
+                            <div className="font-mono font-black text-xl text-red-400">+{diff}</div>
+                          </div>
+                          <div className="bg-black/30 rounded-xl p-3 border border-emerald-600/20">
+                            <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">目标价值</div>
+                            <div className="font-mono font-black text-xl text-emerald-400">{targetValue}</div>
+                          </div>
+                        </div>
+                        <div className="pt-3 border-t border-yellow-600/20 space-y-2">
+                          <div className="flex items-start gap-2 text-xs">
+                            <span className="text-yellow-500 flex-shrink-0 mt-0.5">💡</span>
+                            <p className="text-yellow-200/80 leading-relaxed">
+                              建议：访问更多采矿点收集矿石，或经过熔炼站提升矿石价值倍率。
+                            </p>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div className="bg-black/30 rounded-xl p-4 border border-white/5 space-y-2 text-sm">
+                  <h4 className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2">本次状态</h4>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">当前矿石价值</span>
+                      <span className="font-mono font-bold text-yellow-400">{rover.cargoValue}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">货箱重量</span>
+                      <span className="font-mono font-bold text-amber-400">{rover.cargoWeight}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">剩余电量</span>
+                      <span className="font-mono font-bold text-cyan-400">{Math.ceil(power)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">剩余时间</span>
+                      <span className="font-mono font-bold text-orange-400">{Math.ceil(timeRemaining)}s</span>
+                    </div>
                   </div>
                 </div>
-                {failReason === 'value' && level && (
-                  <div className="mt-3 pt-3 border-t border-white/5 text-center">
-                    <span className="text-xs text-gray-500">目标价值: </span>
-                    <span className="font-mono font-bold text-red-400">
-                      {level.baseStations.find(b => b.type === 'return')?.requiredValue || 0}
-                    </span>
-                    <span className="text-xs text-gray-500"> · 差额: </span>
-                    <span className="font-mono font-bold text-red-300">
-                      +{Math.max(0, (level.baseStations.find(b => b.type === 'return')?.requiredValue || 0) - rover.cargoValue)}
-                    </span>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div className="text-center">
                 <p className="text-xs text-gray-500 mb-2">提示：必经过的站点类型</p>

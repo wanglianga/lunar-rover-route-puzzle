@@ -743,7 +743,8 @@ export default class GameScene extends Phaser.Scene {
           actions.setMessage('成功返回！任务完成');
           this.cameras.main.flash(500, 255, 255, 255, false);
         } else {
-          actions.setMessage(`矿石价值不足！需要 ${station.requiredValue}，当前 ${state.rover.cargoValue}`);
+          actions.failGame('value');
+          this.cameras.main.shake(200, 0.006);
         }
         break;
       }
