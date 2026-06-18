@@ -1,6 +1,6 @@
 import { Star, RotateCcw, Home, ChevronRight, Trophy, XCircle, Lightbulb } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
-import { FAIL_REASON_MESSAGES, BASE_TYPE_INFO } from '../types/game';
+import { FAIL_REASON_MESSAGES, BASE_TYPE_INFO, ORE_TYPE_INFO } from '../types/game';
 import { LEVELS } from '../game/config/levels';
 
 interface ResultModalProps {
@@ -21,6 +21,9 @@ export default function ResultModal({ onBackToMenu, onNextLevel }: ResultModalPr
     timeRemaining,
     power,
     oxygen,
+    shadowStates,
+    trackDamages,
+    reinforcedNodes,
     actions
   } = useGameStore();
 
@@ -160,6 +163,7 @@ export default function ResultModal({ onBackToMenu, onNextLevel }: ResultModalPr
                         {failReason === 'collision' && '💥'}
                         {failReason === 'window' && '⏰'}
                         {failReason === 'value' && '⛏'}
+                        {failReason === 'track_collapse' && '🏚'}
                       </span>
                     </div>
                     <div>
@@ -260,7 +264,19 @@ export default function ResultModal({ onBackToMenu, onNextLevel }: ResultModalPr
               )}
 
               <div className="text-center">
-                <p className="text-xs text-gray-500 mb-2">提示：必经过的站点类型</p>
+                <p className="text-xs text-gray-500 mb-2">提示：矿石类型与站点</p>
+                <div className="flex flex-wrap justify-center gap-1.5 mb-2">
+                  {Object.entries(ORE_TYPE_INFO).map(([key, info]) => (
+                    <div
+                      key={key}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 border border-white/10 text-xs"
+                      style={{ color: info.color }}
+                    >
+                      <span>{info.icon}</span>
+                      <span>{info.label}</span>
+                    </div>
+                  ))}
+                </div>
                 <div className="flex flex-wrap justify-center gap-1.5">
                   {Object.entries(BASE_TYPE_INFO).filter(([k]) => ['mine', 'smelter', 'solar', 'oxygen'].includes(k)).map(([key, info]) => (
                     <div
@@ -273,6 +289,12 @@ export default function ResultModal({ onBackToMenu, onNextLevel }: ResultModalPr
                     </div>
                   ))}
                 </div>
+                {level?.shadowZones && level.shadowZones.length > 0 && (
+                  <p className="text-[10px] text-indigo-400/60 mt-2">☀ 太阳能区会被阴影周期性遮住，观察节奏择时充电</p>
+                )}
+                {level?.trackNodes.some(n => n.trackType === 'weak') && (
+                  <p className="text-[10px] text-orange-400/60 mt-1">⚠ 临时轨道无法承受重矿石，先轻载通过可加固轨道</p>
+                )}
               </div>
             </div>
           )}

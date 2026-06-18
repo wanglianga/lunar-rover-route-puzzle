@@ -1,21 +1,33 @@
 import Phaser from 'phaser';
-import type { LevelConfig, TrackNode, BaseStation, MeteorState } from '../../types/game';
-import { BASE_TYPE_INFO } from '../../types/game';
+import type { LevelConfig, TrackNode, BaseStation, MeteorState, ShadowState } from '../../types/game';
+import { BASE_TYPE_INFO, ORE_TYPE_INFO } from '../../types/game';
 import { useGameStore } from '../../store/gameStore';
 
 const GRAVITY_MULTIPLIER = 0.17;
 const BASE_ACCELERATION = 180;
-const BRAKE_DECELERATION = 250;
+const LIGHT_WEIGHT_ACCEL_BONUS = 1.6;
+const HEAVY_WEIGHT_ACCEL_PENALTY = 0.55;
+const BRAKE_DECELERATION = 280;
+const LIGHT_WEIGHT_BRAKE_BONUS = 1.4;
+const HEAVY_WEIGHT_BRAKE_PENALTY = 0.45;
 const BASE_DECELERATION = 40;
 const JUNCTION_TRIGGER_DISTANCE = 20;
 const POWER_DRAIN_BASE = 1.5;
 const POWER_DRAIN_SPEED_FACTOR = 0.008;
-const POWER_DRAIN_WEIGHT_FACTOR = 0.05;
+const POWER_DRAIN_WEIGHT_FACTOR = 0.06;
+const POWER_DRAIN_LIGHT_WEIGHT_BONUS = 0.6;
 const OXYGEN_DRAIN = 0.8;
 const JUMP_POWER_COST_BASE = 15;
 const JUMP_POWER_COST_PER_DIST = 0.03;
+const JUMP_POWER_WEIGHT_FACTOR = 0.8;
 const DERAIL_SPEED_THRESHOLD = 150;
 const DERAIL_ANGLE_THRESHOLD = 0.9;
+const DERAIL_LIGHT_WEIGHT_REDUCTION = 0.3;
+const DERAIL_HEAVY_WEIGHT_MULTIPLIER = 2.5;
+const SHADOW_POWER_RESTORE_MULTIPLIER = 0.25;
+const WEAK_TRACK_DAMAGE_PER_WEIGHT = 0.035;
+const WEAK_TRACK_DAMAGE_HEAVY_EXTRA = 0.08;
+const TRACK_COLLAPSE_THRESHOLD = 1.0;
 
 export default class GameScene extends Phaser.Scene {
   private graphics!: Phaser.GameObjects.Graphics;
@@ -28,6 +40,9 @@ export default class GameScene extends Phaser.Scene {
   private meteorWarnings: Map<string, Phaser.GameObjects.Arc> = new Map();
   private meteorObjects: Map<string, Phaser.GameObjects.Graphics> = new Map();
   private stationSprites: Map<string, Phaser.GameObjects.Container> = new Map();
+  private shadowOverlays: Map<string, Phaser.GameObjects.Graphics> = new Map();
+  private shadowProgressBars: Map<string, { bg: Phaser.GameObjects.Graphics; fill: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; timer: Phaser.GameObjects.Text }> = new Map();
+  private weakTrackWarnings: Map<string, Phaser.GameObjects.Graphics> = new Map();
   private trackGlows: Phaser.GameObjects.Graphics[] = [];
   private lastUpdateMs = 0;
   private processedMeteorIndices: Set<number> = new Set();
@@ -54,6 +69,8 @@ export default class GameScene extends Phaser.Scene {
     this.drawTracks(state.level);
     this.createObstacles(state.level);
     this.createBaseStations(state.level);
+    this.createShadowOverlays(state.level);
+    this.createWeakTrackMarkers(state.level);
     this.createRover();
     this.createDustParticles();
     this.setupInputListeners();
@@ -111,7 +128,6 @@ export default class GameScene extends Phaser.Scene {
     const nodeMap = new Map<string, TrackNode>();
     level.trackNodes.forEach(n => nodeMap.set(n.id, n));
 
-    this.graphics.lineStyle(10, 0x3a3020, 0.6);
     const drawnEdges = new Set<string>();
 
     level.trackNodes.forEach(node => {
@@ -121,33 +137,43 @@ export default class GameScene extends Phaser.Scene {
         drawnEdges.add(edgeKey);
         const target = nodeMap.get(connId);
         if (!target) return;
-        this.graphics.lineBetween(node.x, node.y, target.x, target.y);
-      });
-    });
 
-    this.graphics.lineStyle(6, 0x8b7355, 1);
-    drawnEdges.clear();
-    level.trackNodes.forEach(node => {
-      node.connections.forEach(connId => {
-        const edgeKey = [node.id, connId].sort().join('-');
-        if (drawnEdges.has(edgeKey)) return;
-        drawnEdges.add(edgeKey);
-        const target = nodeMap.get(connId);
-        if (!target) return;
-        this.graphics.lineBetween(node.x, node.y, target.x, target.y);
-      });
-    });
+        const isWeak = node.trackType === 'weak' || target.trackType === 'weak';
 
-    this.graphics.lineStyle(2, 0xc9b898, 0.8);
-    drawnEdges.clear();
-    level.trackNodes.forEach(node => {
-      node.connections.forEach(connId => {
-        const edgeKey = [node.id, connId].sort().join('-');
-        if (drawnEdges.has(edgeKey)) return;
-        drawnEdges.add(edgeKey);
-        const target = nodeMap.get(connId);
-        if (!target) return;
-        this.graphics.lineBetween(node.x, node.y, target.x, target.y);
+        if (isWeak) {
+          const g = this.add.graphics();
+          g.lineStyle(8, 0x5a4030, 0.6);
+          g.lineBetween(node.x, node.y, target.x, target.y);
+          g.lineStyle(4, 0x8b6040, 1);
+          g.lineBetween(node.x, node.y, target.x, target.y);
+          g.lineStyle(1, 0xcc9966, 0.5);
+          const dx = target.x - node.x;
+          const dy = target.y - node.y;
+          const len = Math.hypot(dx, dy);
+          const dashLen = 10;
+          const gapLen = 8;
+          let dist = 0;
+          while (dist < len) {
+            const segEnd = Math.min(dist + dashLen, len);
+            const t1 = dist / len;
+            const t2 = segEnd / len;
+            g.lineBetween(
+              node.x + dx * t1, node.y + dy * t1,
+              node.x + dx * t2, node.y + dy * t2
+            );
+            dist = segEnd + gapLen;
+          }
+          this.trackGlows.push(g);
+        } else {
+          this.graphics.lineStyle(10, 0x3a3020, 0.6);
+          this.graphics.lineBetween(node.x, node.y, target.x, target.y);
+
+          this.graphics.lineStyle(6, 0x8b7355, 1);
+          this.graphics.lineBetween(node.x, node.y, target.x, target.y);
+
+          this.graphics.lineStyle(2, 0xc9b898, 0.8);
+          this.graphics.lineBetween(node.x, node.y, target.x, target.y);
+        }
       });
     });
 
@@ -159,6 +185,13 @@ export default class GameScene extends Phaser.Scene {
         this.graphics.fillCircle(node.x, node.y, 8);
         this.graphics.lineStyle(2, 0xffddaa, 1);
         this.graphics.strokeCircle(node.x, node.y, 12);
+      } else if (node.trackType === 'weak') {
+        this.graphics.fillStyle(0x2a1a0a, 0.9);
+        this.graphics.fillCircle(node.x, node.y, 8);
+        this.graphics.fillStyle(0x8b6040, 0.9);
+        this.graphics.fillCircle(node.x, node.y, 4);
+        this.graphics.lineStyle(1, 0xcc9966, 0.6);
+        this.graphics.strokeCircle(node.x, node.y, 8);
       } else {
         this.graphics.fillStyle(0x3a3020, 0.8);
         this.graphics.fillCircle(node.x, node.y, 6);
@@ -235,6 +268,19 @@ export default class GameScene extends Phaser.Scene {
     nameText.setStroke('#0a0a15', 3);
     container.add(nameText);
 
+    if (station.type === 'mine' && station.oreType) {
+      const oreInfo = ORE_TYPE_INFO[station.oreType];
+      const oreLabel = this.add.text(0, -35, `${oreInfo.icon}${oreInfo.label}`, {
+        fontSize: '10px',
+        color: oreInfo.color,
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold'
+      });
+      oreLabel.setOrigin(0.5);
+      oreLabel.setStroke('#0a0a15', 2);
+      container.add(oreLabel);
+    }
+
     this.tweens.add({
       targets: glow,
       scale: { from: 1, to: 1.3 },
@@ -246,6 +292,102 @@ export default class GameScene extends Phaser.Scene {
     });
 
     this.stationSprites.set(station.id, container);
+  }
+
+  private createShadowOverlays(level: LevelConfig) {
+    if (!level.shadowZones) return;
+
+    const nodeMap = new Map<string, TrackNode>();
+    level.trackNodes.forEach(n => nodeMap.set(n.id, n));
+
+    level.shadowZones.forEach(sz => {
+      const station = level.baseStations.find(s => s.id === sz.stationId);
+      if (!station) return;
+      const node = nodeMap.get(station.nodeId);
+      if (!node) return;
+
+      const shadowGfx = this.add.graphics();
+      shadowGfx.fillStyle(0x000033, 0.4);
+      shadowGfx.fillCircle(0, 0, 45);
+      shadowGfx.lineStyle(2, 0x3333aa, 0.6);
+      shadowGfx.strokeCircle(0, 0, 45);
+      shadowGfx.setPosition(node.x, node.y);
+      shadowGfx.setAlpha(0);
+      shadowGfx.setDepth(5);
+
+      this.shadowOverlays.set(sz.id, shadowGfx);
+
+      const barBg = this.add.graphics();
+      barBg.fillStyle(0x000000, 0.6);
+      barBg.fillRoundedRect(-35, 48, 70, 8, 2);
+      barBg.lineStyle(1, 0x4a4a7a, 0.8);
+      barBg.strokeRoundedRect(-35, 48, 70, 8, 2);
+      barBg.setPosition(node.x, node.y);
+      barBg.setDepth(6);
+
+      const barFill = this.add.graphics();
+      barFill.setPosition(node.x, node.y);
+      barFill.setDepth(6);
+
+      const labelText = this.add.text(node.x, node.y + 42, '☀ 光照中', {
+        fontSize: '10px',
+        color: '#4ecdc4',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold'
+      });
+      labelText.setOrigin(0.5);
+      labelText.setDepth(6);
+      labelText.setStroke('#0a0a15', 2);
+
+      const timerText = this.add.text(node.x, node.y + 62, '', {
+        fontSize: '10px',
+        color: '#ffffff',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold'
+      });
+      timerText.setOrigin(0.5);
+      timerText.setDepth(6);
+      timerText.setStroke('#0a0a15', 2);
+
+      this.shadowProgressBars.set(sz.id, {
+        bg: barBg,
+        fill: barFill,
+        label: labelText,
+        timer: timerText
+      });
+    });
+  }
+
+  private createWeakTrackMarkers(level: LevelConfig) {
+    level.trackNodes.forEach(node => {
+      if (node.trackType !== 'weak') return;
+
+      const marker = this.add.graphics();
+      marker.fillStyle(0xff6600, 0.3);
+      marker.fillCircle(node.x, node.y, 20);
+      marker.lineStyle(2, 0xff9900, 0.5);
+      marker.strokeCircle(node.x, node.y, 20);
+
+      const warnText = this.add.text(node.x, node.y - 28, '⚠临时', {
+        fontSize: '9px',
+        color: '#ff9900',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold'
+      });
+      warnText.setOrigin(0.5);
+      warnText.setStroke('#0a0a15', 2);
+
+      this.tweens.add({
+        targets: marker,
+        alpha: { from: 0.6, to: 0.2 },
+        duration: 1500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+
+      this.weakTrackWarnings.set(node.id, marker);
+    });
   }
 
   private createRover() {
@@ -302,13 +444,26 @@ export default class GameScene extends Phaser.Scene {
     const state = useGameStore.getState();
     if (state.rover.cargoAttached) {
       if (state.rover.hasCargo) {
-        this.cargoSprite.fillStyle(0xd4af37, 0.95);
+        const weightRatio = Math.min(1, state.rover.cargoWeight / 25);
+        let cargoColor = 0xd4af37;
+        let borderColor = 0xffd700;
+        if (state.rover.cargoWeight >= 20) {
+          cargoColor = 0xcc3300;
+          borderColor = 0xff4500;
+        } else if (state.rover.cargoWeight >= 12) {
+          cargoColor = 0xdaa520;
+          borderColor = 0xffcc00;
+        } else {
+          cargoColor = 0x87ceeb;
+          borderColor = 0xaaddff;
+        }
+
+        this.cargoSprite.fillStyle(cargoColor, 0.95);
         this.cargoSprite.fillRoundedRect(-28, -6, 12, 16, 2);
-        this.cargoSprite.lineStyle(2, 0xffd700, 1);
+        this.cargoSprite.lineStyle(2, borderColor, 1);
         this.cargoSprite.strokeRoundedRect(-28, -6, 12, 16, 2);
 
-        const weightRatio = Math.min(1, state.rover.cargoWeight / 25);
-        this.cargoSprite.fillStyle(0x8b6914, 0.4 + weightRatio * 0.4);
+        this.cargoSprite.fillStyle(0x000000, 0.3 + weightRatio * 0.3);
         this.cargoSprite.fillRoundedRect(-26, -4, 8, 12, 1);
       } else {
         this.cargoSprite.fillStyle(0x8b7355, 0.7);
@@ -417,7 +572,13 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
-    const cost = Math.floor(JUMP_POWER_COST_BASE + nearestDist * JUMP_POWER_COST_PER_DIST);
+    let weightCostBonus = state.rover.cargoWeight * JUMP_POWER_WEIGHT_FACTOR;
+    if (state.rover.cargoAttached && state.rover.hasCargo && state.rover.cargoWeight <= 8) {
+      weightCostBonus *= 0.5;
+    } else if (state.rover.cargoAttached && state.rover.hasCargo && state.rover.cargoWeight >= 20) {
+      weightCostBonus *= 1.8;
+    }
+    const cost = Math.floor(JUMP_POWER_COST_BASE + nearestDist * JUMP_POWER_COST_PER_DIST + weightCostBonus);
     if (state.power < cost) {
       actions.setMessage(`电量不足！跃迁需要 ${cost} 电量`);
       this.startMessageTimer();
@@ -494,10 +655,13 @@ export default class GameScene extends Phaser.Scene {
         this.tryToggleCargo();
       }
 
+      this.updateShadowStates(state, delta);
       this.updateResources(state, delta);
       this.updateRoverPhysics(state, delta, deltaMs);
       this.updateMeteors(state, delta);
       this.checkCollisions(state);
+      this.updateWeakTrackVisuals(state);
+      this.updateShadowVisuals(state);
       this.updateVisuals(state);
 
       this.stationTriggerCooldown = Math.max(0, this.stationTriggerCooldown - delta);
@@ -518,11 +682,35 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
+  private updateShadowStates(state: ReturnType<typeof useGameStore.getState>, delta: number) {
+    const level = state.level!;
+    if (!level.shadowZones) return;
+
+    const updatedShadows: ShadowState[] = state.shadowStates.map(ss => {
+      const zoneConfig = level.shadowZones!.find(z => z.id === ss.id);
+      if (!zoneConfig) return ss;
+
+      const newTimeInCycle = (ss.timeInCycle + delta) % zoneConfig.cycleDuration;
+      const isShadowed = newTimeInCycle >= (zoneConfig.cycleDuration - zoneConfig.shadowDuration);
+
+      return {
+        ...ss,
+        timeInCycle: newTimeInCycle,
+        isShadowed
+      };
+    });
+
+    state.actions.updateShadowStates(updatedShadows);
+  }
+
   private updateResources(state: ReturnType<typeof useGameStore.getState>, delta: number) {
     const actions = state.actions;
     const rover = state.rover;
 
     let powerDrain = POWER_DRAIN_BASE + Math.abs(rover.speed) * POWER_DRAIN_SPEED_FACTOR + rover.cargoWeight * POWER_DRAIN_WEIGHT_FACTOR;
+    if (rover.cargoAttached && rover.hasCargo && rover.cargoWeight <= 8) {
+      powerDrain *= POWER_DRAIN_LIGHT_WEIGHT_BONUS;
+    }
     if (!rover.cargoAttached) {
       powerDrain *= 0.7;
     }
@@ -539,19 +727,47 @@ export default class GameScene extends Phaser.Scene {
     const nodeMap = new Map<string, TrackNode>();
     level.trackNodes.forEach(n => nodeMap.set(n.id, n));
 
-    let effectiveMaxSpeed = rover.maxSpeed / (1 + rover.cargoWeight * 0.025);
+    let effectiveMaxSpeed = rover.maxSpeed / (1 + rover.cargoWeight * 0.028);
     if (!rover.cargoAttached) {
-      effectiveMaxSpeed *= 1.4;
+      effectiveMaxSpeed *= 1.5;
+    }
+    if (rover.cargoAttached && rover.hasCargo && rover.cargoWeight <= 8) {
+      effectiveMaxSpeed *= 1.15;
+    }
+
+    let effectiveAcceleration = BASE_ACCELERATION;
+    if (rover.cargoAttached && rover.hasCargo) {
+      if (rover.cargoWeight <= 8) {
+        effectiveAcceleration *= LIGHT_WEIGHT_ACCEL_BONUS;
+      } else if (rover.cargoWeight >= 20) {
+        effectiveAcceleration *= HEAVY_WEIGHT_ACCEL_PENALTY;
+      } else {
+        effectiveAcceleration /= (1 + rover.cargoWeight * 0.015);
+      }
+    }
+
+    const weightBrakeFactor = level.weightBrakeFactor || 3;
+    let effectiveBrakeDeceleration = BRAKE_DECELERATION;
+    if (rover.cargoAttached && rover.hasCargo) {
+      if (rover.cargoWeight <= 8) {
+        effectiveBrakeDeceleration *= LIGHT_WEIGHT_BRAKE_BONUS;
+      } else if (rover.cargoWeight >= 20) {
+        effectiveBrakeDeceleration *= HEAVY_WEIGHT_BRAKE_PENALTY;
+      } else {
+        effectiveBrakeDeceleration /= (1 + rover.cargoWeight * weightBrakeFactor * 0.012);
+      }
     }
 
     if (rover.isAccelerating && state.power > 0) {
-      rover.speed = Math.min(effectiveMaxSpeed, rover.speed + BASE_ACCELERATION * delta);
+      rover.speed = Math.min(effectiveMaxSpeed, rover.speed + effectiveAcceleration * delta);
     }
     if (rover.isBraking) {
-      rover.speed = Math.max(0, rover.speed - BRAKE_DECELERATION * delta);
+      rover.speed = Math.max(0, rover.speed - effectiveBrakeDeceleration * delta);
     }
     if (!rover.isAccelerating) {
-      rover.speed = Math.max(0, rover.speed - BASE_DECELERATION * GRAVITY_MULTIPLIER * delta);
+      const baseDecel = BASE_DECELERATION * GRAVITY_MULTIPLIER;
+      const weightDecelBonus = rover.cargoAttached && rover.hasCargo && rover.cargoWeight <= 8 ? 1.2 : 1;
+      rover.speed = Math.max(0, rover.speed - baseDecel * weightDecelBonus * delta);
     }
 
     const currentNode = nodeMap.get(rover.currentNodeId)!;
@@ -596,11 +812,57 @@ export default class GameScene extends Phaser.Scene {
           if (currentNode.isJunction) {
             const angleChange = Math.abs(this.angleDifference(this.derailAngle, rover.angle));
             this.derailAngle = rover.angle;
-            if (angleChange > DERAIL_ANGLE_THRESHOLD && rover.speed > DERAIL_SPEED_THRESHOLD && rover.cargoAttached && rover.hasCargo) {
-              if (Math.random() < 0.02 + (rover.speed - DERAIL_SPEED_THRESHOLD) * 0.001) {
+            let derailChance = 0;
+            if (rover.cargoAttached && rover.hasCargo) {
+              if (rover.cargoWeight <= 8) {
+                derailChance = 0.005 + (rover.speed - DERAIL_SPEED_THRESHOLD) * 0.0005;
+                derailChance *= DERAIL_LIGHT_WEIGHT_REDUCTION;
+              } else if (rover.cargoWeight >= 20) {
+                derailChance = (0.03 + (rover.speed - DERAIL_SPEED_THRESHOLD) * 0.002) * DERAIL_HEAVY_WEIGHT_MULTIPLIER;
+                derailChance += rover.cargoWeight * 0.004;
+              } else {
+                derailChance = 0.015 + (rover.speed - DERAIL_SPEED_THRESHOLD) * 0.001 + rover.cargoWeight * 0.0025;
+              }
+            }
+            const derailSpeedThreshold = rover.cargoWeight >= 20
+              ? DERAIL_SPEED_THRESHOLD - rover.cargoWeight * 3
+              : DERAIL_SPEED_THRESHOLD - rover.cargoWeight * 1.5;
+            if (angleChange > DERAIL_ANGLE_THRESHOLD && rover.speed > derailSpeedThreshold && derailChance > 0) {
+              if (Math.random() < Math.max(0, derailChance)) {
                 actions.failGame('derail');
                 return;
               }
+            }
+          }
+
+          const isOnWeakTrack = currentNode.trackType === 'weak' || (targetNode.trackType === 'weak');
+          if (isOnWeakTrack && rover.cargoAttached && rover.cargoWeight > 0 && !state.reinforcedNodes.includes(currentNode.id)) {
+            const collapseWeight = level.weakTrackCollapseWeight || 20;
+            let damage = 0;
+            if (rover.cargoWeight <= 8) {
+              damage = rover.cargoWeight * WEAK_TRACK_DAMAGE_PER_WEIGHT * delta * 0.15;
+            } else if (rover.cargoWeight >= 20) {
+              damage = rover.cargoWeight * (WEAK_TRACK_DAMAGE_PER_WEIGHT + WEAK_TRACK_DAMAGE_HEAVY_EXTRA) * delta * Math.pow(rover.cargoWeight / collapseWeight, 1.5);
+            } else {
+              damage = rover.cargoWeight * WEAK_TRACK_DAMAGE_PER_WEIGHT * delta * (rover.cargoWeight / collapseWeight);
+            }
+            actions.addTrackDamage(currentNode.id, damage);
+
+            const currentDamage = state.trackDamages.find(d => d.nodeId === currentNode.id);
+            const totalDamage = (currentDamage?.damageLevel || 0) + damage;
+
+            if (totalDamage >= TRACK_COLLAPSE_THRESHOLD) {
+              actions.failGame('track_collapse');
+              this.cameras.main.shake(500, 0.015);
+              return;
+            }
+
+            if (rover.cargoWeight >= collapseWeight * 0.6 && Math.random() < 0.015) {
+              actions.setMessage('⚠临时轨道承受压力！重矿石风险极高');
+              this.startMessageTimer();
+            } else if (rover.cargoWeight >= collapseWeight * 0.4 && Math.random() < 0.005) {
+              actions.setMessage('临时轨道吱呀作响，注意重量！');
+              this.startMessageTimer();
             }
           }
         }
@@ -642,6 +904,45 @@ export default class GameScene extends Phaser.Scene {
 
     this.triggerStation(state, targetNode.id);
 
+    if (targetNode.trackType === 'weak' && !state.reinforcedNodes.includes(targetNode.id)) {
+      const isLightOrEmpty = !state.rover.cargoAttached || state.rover.cargoWeight <= 8;
+      if (state.rover.cargoAttached && state.rover.cargoWeight > 0 && !isLightOrEmpty) {
+        const collapseWeight = state.level?.weakTrackCollapseWeight || 20;
+        let damage = 0;
+        if (state.rover.cargoWeight >= 20) {
+          damage = state.rover.cargoWeight * (WEAK_TRACK_DAMAGE_PER_WEIGHT + WEAK_TRACK_DAMAGE_HEAVY_EXTRA) * (state.rover.cargoWeight / collapseWeight);
+        } else {
+          damage = state.rover.cargoWeight * WEAK_TRACK_DAMAGE_PER_WEIGHT * (state.rover.cargoWeight / collapseWeight);
+        }
+        actions.addTrackDamage(targetNode.id, damage);
+
+        const currentDamage = state.trackDamages.find((d: any) => d.nodeId === targetNode.id);
+        const totalDamage = (currentDamage?.damageLevel || 0) + damage;
+
+        if (totalDamage >= TRACK_COLLAPSE_THRESHOLD) {
+          actions.failGame('track_collapse');
+          this.cameras.main.shake(500, 0.015);
+          return;
+        }
+      } else if (isLightOrEmpty) {
+        actions.reinforceNode(targetNode.id);
+        const marker = this.weakTrackWarnings.get(targetNode.id);
+        if (marker) {
+          marker.clear();
+          marker.fillStyle(0x22aa44, 0.4);
+          marker.fillCircle(targetNode.x, targetNode.y, 20);
+          marker.lineStyle(2, 0x33cc55, 0.6);
+          marker.strokeCircle(targetNode.x, targetNode.y, 20);
+        }
+        if (state.rover.cargoAttached && state.rover.cargoWeight > 0) {
+          actions.setMessage('✓轻矿石加固了临时轨道！');
+        } else {
+          actions.setMessage('✓空车通过加固了临时轨道！');
+        }
+        this.startMessageTimer();
+      }
+    }
+
     if (rover.speed > 2 && targetNode.connections.length > 0) {
       let nextCandidates = targetNode.connections.filter(c => c !== rover.prevNodeId);
 
@@ -681,8 +982,17 @@ export default class GameScene extends Phaser.Scene {
 
     if (state.visitedStations.includes(station.id)) {
       if (station.type === 'solar') {
-        actions.restorePower(station.powerRestore || 0);
-        actions.setMessage(`补充 ${station.powerRestore} 电量`);
+        const shadowState = state.shadowStates.find(ss => ss.stationId === station.id);
+        const isShadowed = shadowState?.isShadowed || false;
+        const baseRestore = station.powerRestore || 0;
+        const actualRestore = isShadowed ? Math.floor(baseRestore * SHADOW_POWER_RESTORE_MULTIPLIER) : baseRestore;
+
+        actions.restorePower(actualRestore);
+        if (isShadowed) {
+          actions.setMessage(`阴影中充电缓慢 +${actualRestore} 电量（效率降低）`);
+        } else {
+          actions.setMessage(`补充 ${actualRestore} 电量`);
+        }
         this.stationTriggerCooldown = 1;
         this.animateStation(station.id);
         this.startMessageTimer();
@@ -709,10 +1019,19 @@ export default class GameScene extends Phaser.Scene {
         }
         const val = station.oreValue || 0;
         const w = station.oreWeight || 0;
+        const oreType = station.oreType || 'medium';
+        const oreInfo = ORE_TYPE_INFO[oreType];
         const currentVal = state.rover.cargoValue;
         const currentW = state.rover.cargoWeight;
         actions2.setCargo(currentVal + val, currentW + w);
-        actions.setMessage(`装载矿石 +${val} 价值 +${w} 重量`);
+
+        let weightWarning = '';
+        if (oreType === 'heavy') {
+          weightWarning = ' ⚠重矿石：刹车距离变长，弱轨道有风险！';
+        } else if (oreType === 'light') {
+          weightWarning = ' 轻便快速！';
+        }
+        actions.setMessage(`${oreInfo.icon}装载${oreInfo.label} +${val}价值 +${w}重量${weightWarning}`);
         this.cameras.main.shake(150, 0.004);
         break;
       }
@@ -733,8 +1052,17 @@ export default class GameScene extends Phaser.Scene {
         break;
       }
       case 'solar': {
-        actions.restorePower(station.powerRestore || 0);
-        actions.setMessage(`补充 ${station.powerRestore} 电量`);
+        const shadowState = state.shadowStates.find(ss => ss.stationId === station.id);
+        const isShadowed = shadowState?.isShadowed || false;
+        const baseRestore = station.powerRestore || 0;
+        const actualRestore = isShadowed ? Math.floor(baseRestore * SHADOW_POWER_RESTORE_MULTIPLIER) : baseRestore;
+
+        actions.restorePower(actualRestore);
+        if (isShadowed) {
+          actions.setMessage(`⚠阴影中！充电效率降低 +${actualRestore} 电量`);
+        } else {
+          actions.setMessage(`补充 ${actualRestore} 电量`);
+        }
         break;
       }
       case 'return': {
@@ -889,6 +1217,82 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
+  private updateWeakTrackVisuals(state: ReturnType<typeof useGameStore.getState>) {
+    state.trackDamages.forEach(damage => {
+      const marker = this.weakTrackWarnings.get(damage.nodeId);
+      if (!marker) return;
+
+      const node = state.level?.trackNodes.find(n => n.id === damage.nodeId);
+      if (!node) return;
+
+      if (state.reinforcedNodes.includes(damage.nodeId)) return;
+
+      marker.clear();
+      const r = damage.damageLevel;
+      const red = Math.floor(255 * Math.min(1, r * 2));
+      const green = Math.floor(153 * (1 - r));
+      const color = (red << 16) | (green << 8);
+      marker.fillStyle(color, 0.3 + r * 0.4);
+      marker.fillCircle(node.x, node.y, 20 + r * 10);
+      marker.lineStyle(2, color, 0.5 + r * 0.5);
+      marker.strokeCircle(node.x, node.y, 20 + r * 10);
+    });
+  }
+
+  private updateShadowVisuals(state: ReturnType<typeof useGameStore.getState>) {
+    if (!state.level?.shadowZones) return;
+
+    state.shadowStates.forEach(ss => {
+      const overlay = this.shadowOverlays.get(ss.id);
+      if (!overlay) return;
+
+      const zoneConfig = state.level!.shadowZones!.find(z => z.id === ss.id);
+      if (!zoneConfig) return;
+
+      const progressBars = this.shadowProgressBars.get(ss.id);
+
+      if (ss.isShadowed) {
+        overlay.setAlpha(0.8);
+        if (progressBars) {
+          const timeLeft = Math.max(0, zoneConfig.cycleDuration - ss.timeInCycle);
+          const progress = Math.min(1, timeLeft / zoneConfig.shadowDuration);
+          progressBars.fill.clear();
+          progressBars.fill.fillStyle(0x818cf8, 1);
+          progressBars.fill.fillRoundedRect(-34, 49, 68 * progress, 6, 2);
+          progressBars.label.setText('🌙 阴影中');
+          progressBars.label.setColor('#a5b4fc');
+          progressBars.timer.setText(`${timeLeft.toFixed(0)}s 后云散`);
+          progressBars.timer.setColor('#c7d2fe');
+          if (timeLeft < 3) {
+            progressBars.label.setColor('#6ee7b7');
+            progressBars.timer.setColor('#6ee7b7');
+          }
+        }
+      } else {
+        const timeToShadow = zoneConfig.cycleDuration - zoneConfig.shadowDuration - ss.timeInCycle;
+        const approaching = timeToShadow < 5 && timeToShadow > 0;
+        overlay.setAlpha(approaching ? 0.3 * (1 - timeToShadow / 5) : 0);
+        if (progressBars) {
+          const sunnyProgress = Math.min(1, ss.timeInCycle / (zoneConfig.cycleDuration - zoneConfig.shadowDuration));
+          progressBars.fill.clear();
+          progressBars.fill.fillStyle(0x22d3ee, 1);
+          progressBars.fill.fillRoundedRect(-34, 49, 68 * sunnyProgress, 6, 2);
+          if (approaching) {
+            progressBars.label.setText('⚠ 阴影临近');
+            progressBars.label.setColor(timeToShadow < 2 ? '#f472b6' : '#a78bfa');
+            progressBars.timer.setText(`${timeToShadow.toFixed(0)}s 后遮蔽`);
+            progressBars.timer.setColor(timeToShadow < 2 ? '#f472b6' : '#c4b5fd');
+          } else {
+            progressBars.label.setText('☀ 光照中');
+            progressBars.label.setColor('#22d3ee');
+            progressBars.timer.setText(`${timeToShadow.toFixed(0)}s 后有云`);
+            progressBars.timer.setColor('#67e8f9');
+          }
+        }
+      }
+    });
+  }
+
   private updateVisuals(state: ReturnType<typeof useGameStore.getState>) {
     const rover = state.rover;
 
@@ -903,6 +1307,8 @@ export default class GameScene extends Phaser.Scene {
       ledColor = 0xff4757;
     } else if (powerRatio < 0.25 || oxygenRatio < 0.25 || state.timeRemaining < 25) {
       ledColor = 0xffd93d;
+    } else if (rover.cargoWeight >= 20 && rover.cargoAttached) {
+      ledColor = 0xff8c00;
     }
     this.ledLight.fillColor = ledColor;
 
@@ -932,6 +1338,18 @@ export default class GameScene extends Phaser.Scene {
     this.meteorWarnings.clear();
     this.meteorObjects.clear();
     this.stationSprites.clear();
+    this.shadowOverlays.forEach(o => o.destroy());
+    this.shadowOverlays.clear();
+    this.shadowProgressBars.forEach(pb => {
+      pb.bg.destroy();
+      pb.fill.destroy();
+      pb.label.destroy();
+      pb.timer.destroy();
+    });
+    this.shadowProgressBars.clear();
+    this.weakTrackWarnings.forEach(w => w.destroy());
+    this.weakTrackWarnings.clear();
+    this.trackGlows = [];
     if (this.messageTimer) {
       this.time.removeEvent(this.messageTimer);
       this.messageTimer = null;

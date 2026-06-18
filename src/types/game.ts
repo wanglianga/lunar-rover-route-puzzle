@@ -1,6 +1,8 @@
 export type GameStatus = 'menu' | 'playing' | 'paused' | 'success' | 'failed';
-export type FailReason = 'power' | 'oxygen' | 'derail' | 'collision' | 'window' | 'value';
+export type FailReason = 'power' | 'oxygen' | 'derail' | 'collision' | 'window' | 'value' | 'track_collapse';
 export type BaseType = 'mine' | 'smelter' | 'oxygen' | 'solar' | 'return' | 'start';
+export type OreType = 'light' | 'medium' | 'heavy';
+export type TrackType = 'normal' | 'weak' | 'reinforced';
 
 export interface TrackNode {
   id: string;
@@ -10,6 +12,7 @@ export interface TrackNode {
   isJunction?: boolean;
   leftConnection?: string;
   rightConnection?: string;
+  trackType?: TrackType;
 }
 
 export interface BaseStation {
@@ -19,10 +22,20 @@ export interface BaseStation {
   name: string;
   oreValue?: number;
   oreWeight?: number;
+  oreType?: OreType;
   valueMultiplier?: number;
   powerRestore?: number;
   oxygenRestore?: number;
   requiredValue?: number;
+}
+
+export interface ShadowZone {
+  id: string;
+  stationId: string;
+  type: 'tower' | 'meteor_cloud';
+  cycleDuration: number;
+  shadowDuration: number;
+  offset: number;
 }
 
 export interface LevelConfig {
@@ -39,6 +52,9 @@ export interface LevelConfig {
   startNodeId: string;
   obstacles: { x: number; y: number; radius: number; type: 'crater' | 'rock' }[];
   meteorSchedule: { time: number; x: number; y: number; warningTime: number; radius: number }[];
+  shadowZones?: ShadowZone[];
+  weightBrakeFactor?: number;
+  weakTrackCollapseWeight?: number;
 }
 
 export interface RoverState {
@@ -68,6 +84,18 @@ export interface MeteorState {
   impacted: boolean;
 }
 
+export interface ShadowState {
+  id: string;
+  stationId: string;
+  isShadowed: boolean;
+  timeInCycle: number;
+}
+
+export interface TrackDamageState {
+  nodeId: string;
+  damageLevel: number;
+}
+
 export interface GameState {
   status: GameStatus;
   failReason?: FailReason;
@@ -90,6 +118,9 @@ export interface GameState {
   message: string | null;
   jumpRequestCount: number;
   cargoToggleRequestCount: number;
+  shadowStates: ShadowState[];
+  trackDamages: TrackDamageState[];
+  reinforcedNodes: string[];
   scoreBreakdown: {
     oreValue: number;
     remainingPowerBonus: number;
@@ -108,7 +139,7 @@ export const FAIL_REASON_MESSAGES: Record<FailReason, { title: string; descripti
   power: {
     title: '电量耗尽',
     description: '矿车电池已完全耗尽，无法继续移动。',
-    suggestion: '提示：尝试在太阳能充电区补充电量，或规划更短的路线减少耗电。'
+    suggestion: '提示：尝试在太阳能充电区补充电量，或规划更短的路线减少耗电。注意阴影会降低充电效率！'
   },
   oxygen: {
     title: '氧气耗尽',
@@ -118,7 +149,7 @@ export const FAIL_REASON_MESSAGES: Record<FailReason, { title: string; descripti
   derail: {
     title: '货箱脱轨',
     description: '货箱在急转弯或高速行驶时脱离了轨道。',
-    suggestion: '提示：在弯道前提前刹车减速，或减轻货箱重量。'
+    suggestion: '提示：在弯道前提前刹车减速，或减轻货箱重量。重矿石会大幅增加脱轨风险！'
   },
   collision: {
     title: '撞击障碍',
@@ -134,7 +165,18 @@ export const FAIL_REASON_MESSAGES: Record<FailReason, { title: string; descripti
     title: '矿石价值不足',
     description: '采集的矿石总价值未达到返回舱的最低要求。',
     suggestion: '提示：访问更多采矿点，或经过熔炼站提升矿石价值。'
+  },
+  track_collapse: {
+    title: '轨道坍塌',
+    description: '重矿石压垮了临时轨道，矿车和货箱坠入深渊！',
+    suggestion: '提示：临时轨道（虚线标识）无法承受重矿石。可先轻载通过加固轨道，再回来运输重矿石。'
   }
+};
+
+export const ORE_TYPE_INFO: Record<OreType, { label: string; color: string; icon: string; description: string }> = {
+  light: { label: '轻矿石', color: '#87ceeb', icon: '💎', description: '加速快、刹车灵敏，但价值低' },
+  medium: { label: '中矿石', color: '#daa520', icon: '⛏', description: '均衡之选，中等价值与重量' },
+  heavy: { label: '重矿石', color: '#ff4500', icon: '🪨', description: '价值极高，但拉长刹车距离、压弯轨道' }
 };
 
 export const BASE_TYPE_INFO: Record<BaseType, { label: string; color: string; icon: string }> = {

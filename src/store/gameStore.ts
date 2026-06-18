@@ -6,7 +6,9 @@ import type {
   GameStatus,
   FailReason,
   PlayerProgress,
-  LevelConfig
+  LevelConfig,
+  ShadowState,
+  TrackDamageState
 } from '../types/game';
 import { getLevelById } from '../game/config/levels';
 
@@ -62,6 +64,16 @@ function createInitialRover(level: LevelConfig): RoverState {
   };
 }
 
+function createInitialShadowStates(level: LevelConfig): ShadowState[] {
+  if (!level.shadowZones) return [];
+  return level.shadowZones.map(sz => ({
+    id: sz.id,
+    stationId: sz.stationId,
+    isShadowed: false,
+    timeInCycle: sz.offset
+  }));
+}
+
 interface GameStore extends GameState {
   playerProgress: PlayerProgress;
   level: LevelConfig | null;
@@ -98,6 +110,9 @@ interface GameStore extends GameState {
     goToMenu: () => void;
     saveScore: (levelId: number, score: number, stars: 0 | 1 | 2 | 3) => void;
     calculateScore: () => void;
+    updateShadowStates: (shadowStates: ShadowState[]) => void;
+    addTrackDamage: (nodeId: string, damage: number) => void;
+    reinforceNode: (nodeId: string) => void;
   };
 }
 
@@ -138,6 +153,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   message: null,
   jumpRequestCount: 0,
   cargoToggleRequestCount: 0,
+  shadowStates: [],
+  trackDamages: [],
+  reinforcedNodes: [],
   scoreBreakdown: null,
   level: null,
   playerProgress: loadProgress(),
@@ -170,6 +188,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: null,
         jumpRequestCount: 0,
         cargoToggleRequestCount: 0,
+        shadowStates: createInitialShadowStates(level),
+        trackDamages: [],
+        reinforcedNodes: [],
         scoreBreakdown: null
       });
     },
@@ -192,6 +213,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: '任务开始！按 W/↑ 加速矿车出发',
         jumpRequestCount: 0,
         cargoToggleRequestCount: 0,
+        shadowStates: createInitialShadowStates(level),
+        trackDamages: [],
+        reinforcedNodes: [],
         scoreBreakdown: null,
         score: 0,
         starRating: 0
@@ -383,6 +407,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
 
       get().actions.saveScore(level.id, total, starRating);
-    }
+    },
+
+    updateShadowStates: (shadowStates: ShadowState[]) => set({ shadowStates }),
+
+    addTrackDamage: (nodeId: string, damage: number) =>
+      set(state => {
+        const existing = state.trackDamages.find(d => d.nodeId === nodeId);
+        if (existing) {
+          return {
+            trackDamages: state.trackDamages.map(d =>
+              d.nodeId === nodeId ? { ...d, damageLevel: Math.min(1, d.damageLevel + damage) } : d
+            )
+          };
+        }
+        return {
+          trackDamages: [...state.trackDamages, { nodeId, damageLevel: damage }]
+        };
+      }),
+
+    reinforceNode: (nodeId: string) =>
+      set(state => {
+        if (state.reinforcedNodes.includes(nodeId)) return {};
+        return { reinforcedNodes: [...state.reinforcedNodes, nodeId] };
+      })
   }
 }));
